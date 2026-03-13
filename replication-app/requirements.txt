@@ -1,0 +1,27 @@
+# PostgreSQL Replication Manager
+# Production dependencies
+
+# Environment configuration
+python-dotenv>=1.0.0
+
+# PostgreSQL driver
+psycopg2-binary>=2.9.9
+
+# Docker SDK for Python
+docker>=7.0.0
+
+# Optional: HTTP server for metrics endpoint
+# flask>=3.0.0
+# gunicorn>=21.0.0
+
+# Optional: Scheduling
+# schedule>=1.2.0
+# APScheduler>=3.10.0
+
+# Development dependencies (uncomment for development)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.0.0
+# types-psycopg2>=2.9.0
