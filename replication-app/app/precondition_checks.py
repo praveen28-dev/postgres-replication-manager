@@ -388,11 +388,18 @@ class PreconditionChecker:
         """
         Verify that the primary PostgreSQL container is running.
         
+        First attempts a local Docker inspection (same-host deployment).
+        If the container is not found locally, falls back to a network-level
+        check using pg_isready (cross-server deployment, e.g. separate EC2
+        instances for primary and replica).
+        
         Returns:
             PreconditionResult with check status
         """
         container_name = self.config.postgres.primary_container
         self.logger.info(f"[PRECHECK] Checking primary container: {container_name}")
+        
+        result = None
         
         try:
             if self._docker_client:
@@ -408,14 +415,14 @@ class PreconditionChecker:
                             details={"container": container_name, "state": state.value}
                         )
                     else:
-                        return PreconditionResult(
+                        result = PreconditionResult(
                             passed=False,
                             message=f"Primary container is not running (state: {state.value})",
                             details={"container": container_name, "state": state.value}
                         )
                         
                 except NotFound:
-                    return PreconditionResult(
+                    result = PreconditionResult(
                         passed=False,
                         message=f"Primary container '{container_name}' not found",
                         details={"container": container_name, "state": "not_found"}
@@ -436,24 +443,119 @@ class PreconditionChecker:
                             details={"container": container_name, "state": state}
                         )
                     else:
-                        return PreconditionResult(
+                        result = PreconditionResult(
                             passed=False,
                             message=f"Primary container is not running (state: {state})",
                             details={"container": container_name, "state": state}
                         )
                 else:
-                    return PreconditionResult(
+                    result = PreconditionResult(
                         passed=False,
                         message=f"Primary container '{container_name}' not found",
                         details={"container": container_name, "error": stderr}
                     )
                     
         except Exception as e:
-            return PreconditionResult(
+            result = PreconditionResult(
                 passed=False,
                 message=f"Error checking primary container: {e}",
                 details={"error": str(e)}
             )
+        
+        # Fallback: network-based check for cross-server deployments.
+        # When the primary container is not on the same Docker host (e.g.
+        # primary on one EC2 instance, replica on another), the local Docker
+        # inspection will fail.  We fall back to pg_isready over the network
+        # to verify the primary database is reachable and accepting connections.
+        if result and not result.passed:
+            not_found = (
+                "not found" in result.message.lower()
+                or (result.details and result.details.get("state") == "not_found")
+            )
+            if not_found:
+                self.logger.info(
+                    "[PRECHECK] Primary container not found locally — "
+                    "checking via network (cross-server deployment)..."
+                )
+                if self._check_primary_via_network():
+                    self.logger.info("[PRECHECK] Primary is reachable via network ✓")
+                    return PreconditionResult(
+                        passed=True,
+                        message="Primary is reachable via network (remote deployment)",
+                        details={
+                            "container": container_name,
+                            "state": "remote_running",
+                            "host": self.config.postgres.primary_host,
+                            "port": self.config.postgres.primary_port,
+                        }
+                    )
+                else:
+                    self.logger.error(
+                        "[PRECHECK] Primary is not reachable locally or via network"
+                    )
+                    return PreconditionResult(
+                        passed=False,
+                        message=(
+                            f"Primary not found locally and not reachable at "
+                            f"{self.config.postgres.primary_host}:{self.config.postgres.primary_port}"
+                        ),
+                        details={
+                            "container": container_name,
+                            "state": "unreachable",
+                            "host": self.config.postgres.primary_host,
+                            "port": self.config.postgres.primary_port,
+                        }
+                    )
+        
+        return result
+    
+    def _check_primary_via_network(self) -> bool:
+        """
+        Check if the primary database is reachable over the network using pg_isready.
+        
+        This is the fallback for cross-server deployments where the primary
+        container is not on the same Docker host as the replica.
+        
+        Returns:
+            True if primary is accepting connections
+        """
+        host = self.config.postgres.primary_host
+        port = str(self.config.postgres.primary_port)
+        
+        try:
+            result = subprocess.run(
+                ["pg_isready", "-h", host, "-p", port, "-t", "5"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode == 0:
+                self.logger.debug(f"[PRECHECK] pg_isready: {result.stdout.strip()}")
+                return True
+            else:
+                self.logger.debug(f"[PRECHECK] pg_isready failed: {result.stderr.strip()}")
+                return False
+        except FileNotFoundError:
+            # pg_isready not installed locally — try via Docker
+            self.logger.debug("[PRECHECK] pg_isready not found locally, trying via Docker...")
+            try:
+                result = subprocess.run(
+                    [
+                        "docker", "run", "--rm", "--network", "host",
+                        "postgres:17",
+                        "pg_isready", "-h", host, "-p", port, "-t", "5",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                return result.returncode == 0
+            except Exception as e:
+                self.logger.debug(f"[PRECHECK] Docker-based pg_isready failed: {e}")
+                return False
+        except Exception as e:
+            self.logger.debug(f"[PRECHECK] Network check failed: {e}")
+            return False
     
     def check_replica_container(self) -> PreconditionResult:
         """
