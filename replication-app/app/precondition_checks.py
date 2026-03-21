@@ -511,7 +511,12 @@ class PreconditionChecker:
     
     def _check_primary_via_network(self) -> bool:
         """
-        Check if the primary database is reachable over the network using pg_isready.
+        Check if the primary database is reachable over the network.
+        
+        Uses a three-tier fallback strategy:
+        1. pg_isready (if installed locally)
+        2. pg_isready via temporary Docker container
+        3. Pure Python TCP socket connection (works everywhere)
         
         This is the fallback for cross-server deployments where the primary
         container is not on the same Docker host as the replica.
@@ -522,6 +527,7 @@ class PreconditionChecker:
         host = self.config.postgres.primary_host
         port = str(self.config.postgres.primary_port)
         
+        # Tier 1: Try pg_isready directly
         try:
             result = subprocess.run(
                 ["pg_isready", "-h", host, "-p", port, "-t", "5"],
@@ -536,25 +542,44 @@ class PreconditionChecker:
                 self.logger.debug(f"[PRECHECK] pg_isready failed: {result.stderr.strip()}")
                 return False
         except FileNotFoundError:
-            # pg_isready not installed locally — try via Docker
-            self.logger.debug("[PRECHECK] pg_isready not found locally, trying via Docker...")
-            try:
-                result = subprocess.run(
-                    [
-                        "docker", "run", "--rm", "--network", "host",
-                        "postgres:17",
-                        "pg_isready", "-h", host, "-p", port, "-t", "5",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                return result.returncode == 0
-            except Exception as e:
-                self.logger.debug(f"[PRECHECK] Docker-based pg_isready failed: {e}")
+            self.logger.debug("[PRECHECK] pg_isready not found locally")
+        except Exception as e:
+            self.logger.debug(f"[PRECHECK] pg_isready error: {e}")
+        
+        # Tier 2: Try pg_isready via Docker
+        try:
+            self.logger.debug("[PRECHECK] Trying pg_isready via Docker...")
+            result = subprocess.run(
+                [
+                    "docker", "run", "--rm", "--network", "host",
+                    "postgres:17",
+                    "pg_isready", "-h", host, "-p", port, "-t", "5",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                return True
+        except Exception as e:
+            self.logger.debug(f"[PRECHECK] Docker-based pg_isready failed: {e}")
+        
+        # Tier 3: Pure Python TCP socket check (works everywhere, no external tools needed)
+        import socket
+        try:
+            self.logger.debug(f"[PRECHECK] Trying TCP socket connection to {host}:{port}...")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result_code = sock.connect_ex((host, int(port)))
+            sock.close()
+            if result_code == 0:
+                self.logger.debug(f"[PRECHECK] TCP connection to {host}:{port} succeeded")
+                return True
+            else:
+                self.logger.debug(f"[PRECHECK] TCP connection to {host}:{port} failed (code: {result_code})")
                 return False
         except Exception as e:
-            self.logger.debug(f"[PRECHECK] Network check failed: {e}")
+            self.logger.debug(f"[PRECHECK] Socket check failed: {e}")
             return False
     
     def check_replica_container(self) -> PreconditionResult:

@@ -118,8 +118,17 @@ class ReplicationLogger:
             console_handler.setFormatter(ConsoleFormatter())
         self._logger.addHandler(console_handler)
         
-        # File handler if specified
+        # File handler if specified — pre-create with restricted permissions
         if log_file:
+            import os
+            from pathlib import Path
+            log_path = Path(log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Create file with owner-only permissions (0o600) before handler opens it.
+            # This prevents other users from reading potentially sensitive log content.
+            fd = os.open(str(log_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            os.close(fd)
+
             file_handler = logging.FileHandler(log_file)
             file_handler.setFormatter(StructuredFormatter())
             self._logger.addHandler(file_handler)

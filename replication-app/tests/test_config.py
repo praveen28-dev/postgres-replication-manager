@@ -86,7 +86,7 @@ class TestLoadConfig:
         "PRIMARY_HOST": "172.31.37.122",
         "PRIMARY_PORT": "5432",
         "REPLICATION_USER": "replicator",
-        "REPLICATION_PASSWORD": "pravz123",
+        "REPLICATION_PASSWORD": "test_only_dummy_password",
         "REPLICA_CONTAINER": "postgres-replica",
         "DATA_DIRECTORY": "/var/lib/postgresql/data",
         "PRIMARY_CONTAINER": "postgres-primary",
@@ -100,7 +100,7 @@ class TestLoadConfig:
         assert config.postgres.primary_host == "172.31.37.122"
         assert config.postgres.primary_port == 5432
         assert config.postgres.replication_user == "replicator"
-        assert config.postgres.replication_password == "pravz123"
+        assert config.postgres.replication_password == "test_only_dummy_password"
         assert config.postgres.replica_container == "postgres-replica"
         assert config.postgres.primary_container == "postgres-primary"
         assert config.postgres.replica_port == 7777

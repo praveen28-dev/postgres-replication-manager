@@ -55,7 +55,19 @@ class PostgresManager:
             Tuple of (success, stdout, stderr)
         """
         cmd = ["docker"] + list(args)
-        self.logger.debug(f"Running command: {' '.join(cmd)}")
+
+        # Redact sensitive env vars (e.g. -e PGPASSWORD=xxx) before logging
+        redacted_args = []
+        prev_was_env_flag = False
+        for arg in args:
+            if prev_was_env_flag and any(
+                kw in arg.upper() for kw in ("PASSWORD", "SECRET", "TOKEN", "KEY")
+            ):
+                redacted_args.append("***REDACTED***")
+            else:
+                redacted_args.append(arg)
+            prev_was_env_flag = (arg == "-e")
+        self.logger.debug(f"Running command: docker {' '.join(redacted_args)}")
         
         try:
             result = subprocess.run(

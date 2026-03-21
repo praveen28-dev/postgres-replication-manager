@@ -720,9 +720,34 @@ class HealthChecker:
             # Get connections
             primary_conn = self._get_primary_connection()
             
-            # Wait a moment for replica to catch up
-            self.logger.info(f"[VALIDATION] Waiting {max_wait_for_sync}s for replica to sync...")
-            time.sleep(max_wait_for_sync)
+            # Dynamic wait: poll replication lag every 2s instead of sleeping the full duration
+            poll_interval = 2
+            elapsed = 0
+            self.logger.info(
+                f"[VALIDATION] Polling replica lag (up to {max_wait_for_sync}s, every {poll_interval}s)..."
+            )
+
+            while elapsed < max_wait_for_sync:
+                status = self.check_replication_status()
+
+                if status.replication_lag_bytes is not None and status.replication_lag_bytes == 0:
+                    self.logger.info(
+                        "[VALIDATION] Replica has fully caught up (0 bytes lag)!"
+                    )
+                    break
+
+                self.logger.info(
+                    f"[VALIDATION] Waiting for replica to catch up... "
+                    f"Current lag: {status.replication_lag_bytes} bytes"
+                )
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+            else:
+                # Loop completed without breaking — timeout reached
+                self.logger.warning(
+                    f"[VALIDATION] Timeout reached ({max_wait_for_sync}s) "
+                    f"waiting for replica to catch up. Proceeding with validation anyway."
+                )
             
             replica_conn = self._get_replica_connection()
             

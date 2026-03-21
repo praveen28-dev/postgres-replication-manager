@@ -29,7 +29,7 @@ from typing import Optional
 from app.config import AppConfig, load_config, validate_config
 from app.logger import get_logger, ReplicationLogger
 from app.postgres_manager import PostgresManager, ContainerError
-from app.backup_manager import BackupManager, BackupError
+from app.backup_manager import BackupManager, BackupError, DockerUnavailableError
 from app.health_check import HealthChecker, HealthCheckError
 from app.precondition_checks import (
     PreconditionChecker,
@@ -157,6 +157,15 @@ class ReplicationManager:
                 
             except (ContainerError, BackupError) as e:
                 self.logger.error(f"[ERROR] Replication failed: {e}")
+                
+                # Docker unavailable is a non-retryable infrastructure failure
+                if isinstance(e, DockerUnavailableError):
+                    self.logger.error(
+                        "[ERROR] Docker is required but not available. "
+                        "Please ensure Docker is installed and the daemon is running."
+                    )
+                    self._print_summary(success=False, error=str(e))
+                    return False
                 
                 # Check for container restart loop
                 if self._container_start_count >= self.MAX_CONTAINER_RESTARTS:
